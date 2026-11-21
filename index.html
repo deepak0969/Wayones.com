@@ -3027,5 +3027,197 @@
 
     init();
   </script>
+<!-- ===== WAYONES REAL-TIME GMAIL OTP MODULE ===== -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<style>
+  #wy-otp-overlay{position:fixed;inset:0;z-index:999999;background:rgba(9,10,15,.92);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;padding:16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#fff;}
+  #wy-otp-card{width:100%;max-width:400px;background:#13151d;border:1px solid #262938;border-radius:18px;padding:26px 22px;box-shadow:0 24px 60px rgba(0,0,0,.6);}
+  .wy-brand{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+  .wy-logo{width:34px;height:34px;border-radius:10px;background:#8D68F6;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;color:#fff;}
+  .wy-title{font-size:19px;font-weight:700;margin:0 0 6px;}
+  .wy-sub{font-size:13px;color:#9ca3af;margin:0 0 18px;line-height:1.45;}
+  .wy-input{width:100%;box-sizing:border-box;background:#0b0c10;border:1px solid #2d3142;border-radius:12px;padding:13px 14px;color:#fff;font-size:16px;outline:none;margin-bottom:12px;}
+  .wy-input:focus{border-color:#8D68F6;}
+  .wy-otp-input{text-align:center;letter-spacing:10px;font-size:22px;font-weight:700;font-family:monospace;}
+  .wy-btn{width:100%;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:600;color:#fff;background:#8D68F6;cursor:pointer;transition:opacity .2s;}
+  .wy-btn:disabled{opacity:.55;cursor:not-allowed;}
+  .wy-row{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;color:#9ca3af;}
+  .wy-link{background:none;border:none;color:#8D68F6;font-size:13px;font-weight:600;cursor:pointer;padding:0;}
+  .wy-link:disabled{color:#6b7280;cursor:not-allowed;}
+  .wy-msg{font-size:13px;margin:10px 0 0;min-height:18px;}
+  .wy-err{color:#f87171;} .wy-ok{color:#34d399;}
+  .wy-hidden{display:none!important;}
+</style>
+
+<div id="wy-otp-overlay" class="wy-hidden">
+  <div id="wy-otp-card">
+    <div class="wy-brand">
+      <div class="wy-logo">W</div>
+      <div style="font-size:18px;font-weight:700;letter-spacing:.3px;">Wayones <span style="color:#8D68F6;font-size:12px;font-weight:600;">SECURITY</span></div>
+    </div>
+
+    <div id="wy-step-email">
+      <h3 class="wy-title">Verify your Email</h3>
+      <p class="wy-sub">Enter your Gmail address to receive a real-time 6-digit login verification code.</p>
+      <input id="wy-email" class="wy-input" type="email" placeholder="you@gmail.com" autocomplete="email">
+      <button id="wy-send-btn" class="wy-btn" type="button">Send Verification Code</button>
+    </div>
+
+    <div id="wy-step-code" class="wy-hidden">
+      <h3 class="wy-title">Enter 6-Digit OTP</h3>
+      <p class="wy-sub">Code sent to <strong id="wy-target-email" style="color:#fff;"></strong>. Valid for <span id="wy-expiry">05:00</span>.</p>
+      <input id="wy-code" class="wy-input wy-otp-input" type="text" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="one-time-code">
+      <button id="wy-verify-btn" class="wy-btn" type="button">Verify & Continue</button>
+      <div class="wy-row">
+        <button id="wy-change-btn" class="wy-link" type="button">Change email</button>
+        <button id="wy-resend-btn" class="wy-link" type="button" disabled>Resend in 45s</button>
+      </div>
+    </div>
+
+    <div id="wy-msg" class="wy-msg"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const CFG = {
+    publicKey: "RaWTg316cUaaY19TM",
+    serviceId: "service_nzjvlvt",
+    templateId: "template_gq557ld"
+  };
+
+  if (sessionStorage.getItem("wayones_otp_verified")) return;
+
+  const overlay = document.getElementById("wy-otp-overlay");
+  const stepEmail = document.getElementById("wy-step-email");
+  const stepCode = document.getElementById("wy-step-code");
+  const emailEl = document.getElementById("wy-email");
+  const codeEl = document.getElementById("wy-code");
+  const sendBtn = document.getElementById("wy-send-btn");
+  const verifyBtn = document.getElementById("wy-verify-btn");
+  const resendBtn = document.getElementById("wy-resend-btn");
+  const changeBtn = document.getElementById("wy-change-btn");
+  const targetEmailEl = document.getElementById("wy-target-email");
+  const expiryEl = document.getElementById("wy-expiry");
+  const msgEl = document.getElementById("wy-msg");
+
+  let currentOtp = null, expiresAt = 0, attempts = 0, cooldown = 0;
+  let expiryTimer = null, cooldownTimer = null;
+
+  overlay.classList.remove("wy-hidden");
+  if (window.emailjs) emailjs.init({ publicKey: CFG.publicKey });
+
+  function setMsg(text, ok) {
+    msgEl.textContent = text;
+    msgEl.className = "wy-msg " + (ok ? "wy-ok" : "wy-err");
+  }
+
+  function generateOtp() {
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    return String(100000 + (arr[0] % 900000));
+  }
+
+  function startTimers() {
+    clearInterval(expiryTimer);
+    clearInterval(cooldownTimer);
+    expiresAt = Date.now() + 5 * 60 * 1000;
+    cooldown = 45;
+
+    expiryTimer = setInterval(() => {
+      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      const m = String(Math.floor(left / 60)).padStart(2, "0");
+      const s = String(left % 60).padStart(2, "0");
+      expiryEl.textContent = m + ":" + s;
+      if (left === 0) {
+        clearInterval(expiryTimer);
+        currentOtp = null;
+        setMsg("OTP expired. Please resend a new code.", false);
+      }
+    }, 1000);
+
+    resendBtn.disabled = true;
+    resendBtn.textContent = "Resend in " + cooldown + "s";
+    cooldownTimer = setInterval(() => {
+      cooldown--;
+      if (cooldown <= 0) {
+        clearInterval(cooldownTimer);
+        resendBtn.disabled = false;
+        resendBtn.textContent = "Resend OTP";
+      } else {
+        resendBtn.textContent = "Resend in " + cooldown + "s";
+      }
+    }, 1000);
+  }
+
+  async function sendOtp() {
+    const email = emailEl.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return setMsg("Please enter a valid email address.", false);
+    }
+    sendBtn.disabled = true;
+    resendBtn.disabled = true;
+    sendBtn.textContent = "Sending OTP...";
+    setMsg("", true);
+
+    const otp = generateOtp();
+    try {
+      await emailjs.send(CFG.serviceId, CFG.templateId, {
+        to_email: email,
+        otp_code: otp,
+        name: "Wayones Security"
+      });
+      currentOtp = otp;
+      attempts = 0;
+      targetEmailEl.textContent = email;
+      stepEmail.classList.add("wy-hidden");
+      stepCode.classList.remove("wy-hidden");
+      codeEl.value = "";
+      codeEl.focus();
+      startTimers();
+      setMsg("Verification code sent to your inbox!", true);
+    } catch (err) {
+      console.error("EmailJS Error:", err);
+      setMsg("Failed to send OTP: " + (err.text || "Check EmailJS template settings."), false);
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Send Verification Code";
+    }
+  }
+
+  sendBtn.addEventListener("click", sendOtp);
+  resendBtn.addEventListener("click", sendOtp);
+
+  changeBtn.addEventListener("click", () => {
+    clearInterval(expiryTimer);
+    clearInterval(cooldownTimer);
+    currentOtp = null;
+    stepCode.classList.add("wy-hidden");
+    stepEmail.classList.remove("wy-hidden");
+    setMsg("", true);
+  });
+
+  verifyBtn.addEventListener("click", () => {
+    const entered = codeEl.value.trim();
+    if (!currentOtp || Date.now() > expiresAt) {
+      return setMsg("OTP expired. Click Resend OTP.", false);
+    }
+    if (attempts >= 5) {
+      return setMsg("Too many wrong attempts. Please resend a new OTP.", false);
+    }
+    if (entered === currentOtp) {
+      clearInterval(expiryTimer);
+      clearInterval(cooldownTimer);
+      sessionStorage.setItem("wayones_otp_verified", emailEl.value.trim());
+      setMsg("Email verified! Opening Wayones...", true);
+      setTimeout(() => overlay.remove(), 500);
+    } else {
+      attempts++;
+      setMsg("Incorrect code (" + (5 - attempts) + " attempts left).", false);
+    }
+  });
+})();
+</script>
+<!-- ===== END WAYONES OTP MODULE ===== -->
 </body>
 </html>
